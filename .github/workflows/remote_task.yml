@@ -1,1 +1,14 @@
 
+name: Koa-Triggered-Mac
+on:
+  repository_dispatch:
+    types: [koa_cmd] # 你的暗号，必须和 Koa 里的 event_type 一致
+
+jobs:
+  run-macos-task:
+    runs-on: macos-latest # 使用免费的 Mac 环境
+    steps:
+      - name: 打印收到的数据
+        run: |
+          echo "Koa 远程点火成功！"
+          echo "设备 UDID: ${{ github.event.client_payload.udid }}"
