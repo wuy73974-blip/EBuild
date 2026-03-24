@@ -1,1 +1,9 @@
+name: Test-My-Mac
+on: repository_dispatch # 允许远程踢门
 
+jobs:
+  hello-mac:
+    runs-on: macos-latest
+    steps:
+      - name: 打印测试消息
+        run: echo "Koa 喊我开机了！参数是 ${{ github.event.client_payload.info }}"
