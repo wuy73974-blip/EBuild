@@ -30,7 +30,7 @@ jobs:
           
           # 4. 下载 IPA 文件
           echo "正在从服务器下载 IPA..."
-          curl -L "$IPA_URL" -o build.ipa
+         curl -fL "$IPA_URL" -o build.ipa || { echo "下载 IPA 失败"; exit 1; }
 
           # 5. 执行验证 (推荐先验证再上传，避免浪费额度)
           echo "正在校验 IPA 配置..."
