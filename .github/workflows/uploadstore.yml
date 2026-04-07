@@ -1,39 +1,63 @@
 - name: Download and Upload IPA
         run: |
-          # 1. 提取变量 (确保变量名和 Koa 的 apple_p8_content 一致)
+          # 1. 提取变量
           IPA_URL="${{ github.event.client_payload.ipa_url }}"
           RAW_P8="${{ github.event.client_payload.apple_p8_content }}"
           KEY_ID="${{ github.event.client_payload.apple_key_id }}"
           ISSUER="${{ github.event.client_payload.apple_issuer_id }}"
+          TASK_ID="${{ github.event.client_payload.taskId }}" # 必须在 Koa 传参时加上这个
 
-          # 2. 核心：定义绝对路径 (避免 ~ 在脚本中失效)
+          # 2. 定义回调函数 (wuyong: 请将下面的 URL 换成你的公网回调地址)
+          CALLBACK_URL="https://你的公网域名.com/api/github/callback"
+          
+          send_callback() {
+            local status=$1
+            local message=$2
+            echo "发送回调: [$status] $message"
+            curl -X POST "$CALLBACK_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"taskId\": \"$TASK_ID\", \"status\": \"$status\", \"message\": \"$message\"}" \
+              --silent --output /dev/null || echo "回调发送失败"
+          }
+
+          # 3. 准备阶段
           P8_DIR="$HOME/.private_keys"
           P8_PATH="$P8_DIR/AuthKey_$KEY_ID.p8"
-
-          # 3. 变量有效性预检
+          
+          send_callback "running" "准备环境并解析证书..."
+          
           if [ -z "$RAW_P8" ]; then
-            echo "错误: 未接收到 apple_p8_content 数据，请检查 Koa 参数名！"
+            send_callback "error" "证书解析失败：Payload 为空"
             exit 1
           fi
 
-          # 4. 创建目录并解码还原 (使用 printf 避免 echo 带来的换行污染)
           mkdir -p "$P8_DIR"
           printf "%s" "$RAW_P8" | base64 -d > "$P8_PATH"
 
-          # 5. 再次验证文件是否存在且不为空
           if [ ! -s "$P8_PATH" ]; then
-            echo "错误: 密钥文件创建失败或为空！"
+            send_callback "error" "密钥文件生成失败"
             exit 1
           fi
-          
-          echo "密钥文件已就绪: $P8_PATH"
 
-          # 6. 下载 IPA
-          curl -fL "$IPA_URL" -o build.ipa || { echo "下载 IPA 失败"; exit 1; }
+          # 4. 下载阶段
+          send_callback "running" "正在从远程下载 IPA 文件..."
+          curl -fL "$IPA_URL" -o build.ipa || { send_callback "error" "IPA 下载失败"; exit 1; }
 
-          # 7. 执行上传 (altool 会自动去 ~/.private_keys 找文件)
+          # 5. 校验阶段 (可选，防止直接上传失败)
+          send_callback "running" "正在进行苹果 App Store 预校验..."
+          xcrun altool --validate-app \
+            -f build.ipa \
+            -t ios \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER" || { send_callback "error" "苹果校验未通过，请检查包体"; exit 1; }
+
+          # 6. 上传阶段
+          send_callback "running" "校验通过，正在正式上传至商店..."
           xcrun altool --upload-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER"
+            --apiIssuer "$ISSUER" || { send_callback "error" "上传 Apple 服务器失败"; exit 1; }
+
+          # 7. 完成
+          send_callback "success" "恭喜！App 已成功上传至 App Store Connect"
