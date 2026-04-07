@@ -8,7 +8,7 @@
           TASK_ID="${{ github.event.client_payload.taskId }}" # 必须在 Koa 传参时加上这个
 
           # 2. 定义回调函数 (wuyong: 请将下面的 URL 换成你的公网回调地址)
-          CALLBACK_URL="https://你的公网域名.com/api/github/callback"
+          CALLBACK_URL="http://api.whzmsl.top/api/ios/uploadipa/callback"
           
           send_callback() {
             local status=$1
