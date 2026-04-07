@@ -1,33 +1,47 @@
-- name: Download and Upload IPA
+name: EBbuild Upload IPA to App Store
+
+on:
+  repository_dispatch:
+    # 修改这里的 types，确保它在你的所有 .yml 中是唯一的！
+    types: [ebbuild_ipa_upload_task] 
+
+jobs:
+  upload:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Process IPA and Callback
         run: |
           # 1. 提取变量
           IPA_URL="${{ github.event.client_payload.ipa_url }}"
           RAW_P8="${{ github.event.client_payload.apple_p8_content }}"
           KEY_ID="${{ github.event.client_payload.apple_key_id }}"
           ISSUER="${{ github.event.client_payload.apple_issuer_id }}"
-          TASK_ID="${{ github.event.client_payload.taskId }}" # 必须在 Koa 传参时加上这个
+          TASK_ID="${{ github.event.client_payload.taskId }}"
 
-          # 2. 定义回调函数 (wuyong: 请将下面的 URL 换成你的公网回调地址)
+          # 2. 回调配置 (wuyong: 确保这个地址 Koa 能收到)
           CALLBACK_URL="http://api.whzmsl.top/api/ios/uploadipa/callback"
           
           send_callback() {
             local status=$1
             local message=$2
-            echo "发送回调: [$status] $message"
+            echo "::notice ::发送回调 [$status]: $message"
             curl -X POST "$CALLBACK_URL" \
               -H "Content-Type: application/json" \
               -d "{\"taskId\": \"$TASK_ID\", \"status\": \"$status\", \"message\": \"$message\"}" \
-              --silent --output /dev/null || echo "回调发送失败"
+              --silent --output /dev/null || echo "警告: 回调接口访问失败"
           }
 
           # 3. 准备阶段
           P8_DIR="$HOME/.private_keys"
           P8_PATH="$P8_DIR/AuthKey_$KEY_ID.p8"
           
-          send_callback "running" "准备环境并解析证书..."
+          send_callback "running" "正在解析证书密钥..."
           
           if [ -z "$RAW_P8" ]; then
-            send_callback "error" "证书解析失败：Payload 为空"
+            send_callback "error" "证书解析失败：Payload 数据为空"
             exit 1
           fi
 
@@ -35,29 +49,35 @@
           printf "%s" "$RAW_P8" | base64 -d > "$P8_PATH"
 
           if [ ! -s "$P8_PATH" ]; then
-            send_callback "error" "密钥文件生成失败"
+            send_callback "error" "密钥文件生成失败（内容为空）"
             exit 1
           fi
 
           # 4. 下载阶段
-          send_callback "running" "正在从远程下载 IPA 文件..."
-          curl -fL "$IPA_URL" -o build.ipa || { send_callback "error" "IPA 下载失败"; exit 1; }
+          send_callback "running" "正在从远程服务器下载 IPA..."
+          curl -fL "$IPA_URL" -o build.ipa || { send_callback "error" "IPA 下载失败，请检查 URL"; exit 1; }
 
-          # 5. 校验阶段 (可选，防止直接上传失败)
-          send_callback "running" "正在进行苹果 App Store 预校验..."
+          # 5. 校验阶段 (xcrun altool)
+          send_callback "running" "正在进行苹果商店合规性校验..."
           xcrun altool --validate-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER" || { send_callback "error" "苹果校验未通过，请检查包体"; exit 1; }
+            --apiIssuer "$ISSUER" || { send_callback "error" "苹果校验未通过，请检查包名或版本号"; exit 1; }
 
           # 6. 上传阶段
-          send_callback "running" "校验通过，正在正式上传至商店..."
+          send_callback "running" "校验通过，正在正式推送到 App Store Connect..."
           xcrun altool --upload-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER" || { send_callback "error" "上传 Apple 服务器失败"; exit 1; }
+            --apiIssuer "$ISSUER" || { send_callback "error" "上传 Apple 服务器超时或失败"; exit 1; }
 
           # 7. 完成
-          send_callback "success" "恭喜！App 已成功上传至 App Store Connect"
+          send_callback "success" "恭喜 wuyong！App 已成功上传至商店"
+
+      - name: Cleanup on Failure
+        if: failure()
+        run: |
+          # 如果中间任何一步崩了，清理一下敏感文件
+          rm -rf ~/.private_keys
