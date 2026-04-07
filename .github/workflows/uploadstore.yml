@@ -2,7 +2,6 @@ name: EBbuild Upload IPA to App Store
 
 on:
   repository_dispatch:
-    # 修改这里的 types，确保它在你的所有 .yml 中是唯一的！
     types: [ebbuild_ipa_upload_task] 
 
 jobs:
@@ -21,12 +20,13 @@ jobs:
           ISSUER="${{ github.event.client_payload.apple_issuer_id }}"
           TASK_ID="${{ github.event.client_payload.taskId }}"
 
-          # 2. 回调配置 (wuyong: 确保这个地址 Koa 能收到)
+          # 2. 回调配置
           CALLBACK_URL="http://api.whzmsl.top/api/ios/uploadipa/callback"
           
           send_callback() {
             local status=$1
-            local message=$2
+            # 使用 jq 或简单的字符串处理来清理 message 中的双引号，防止 JSON 解析失败
+            local message=$(echo "$2" | tr -d '"' | tr -d '\n' | tail -c 1000)
             echo "::notice ::发送回调 [$status]: $message"
             curl -X POST "$CALLBACK_URL" \
               -H "Content-Type: application/json" \
@@ -41,7 +41,7 @@ jobs:
           send_callback "running" "正在解析证书密钥..."
           
           if [ -z "$RAW_P8" ]; then
-            send_callback "error" "证书解析失败：Payload 数据为空"
+            send_callback "error" "证书解析失败：Payload 密钥数据为空"
             exit 1
           fi
 
@@ -49,35 +49,48 @@ jobs:
           printf "%s" "$RAW_P8" | base64 -d > "$P8_PATH"
 
           if [ ! -s "$P8_PATH" ]; then
-            send_callback "error" "密钥文件生成失败（内容为空）"
+            send_callback "error" "密钥文件生成失败，Base64 解码异常"
             exit 1
           fi
 
           # 4. 下载阶段
           send_callback "running" "正在从远程服务器下载 IPA..."
-          curl -fL "$IPA_URL" -o build.ipa || { send_callback "error" "IPA 下载失败，请检查 URL"; exit 1; }
+          curl -fL "$IPA_URL" -o build.ipa || { send_callback "error" "IPA 下载失败，请检查 URL 是否有效"; exit 1; }
 
-          # 5. 校验阶段 (xcrun altool)
+          # 5. 校验阶段 (捕获详细报错)
           send_callback "running" "正在进行苹果商店合规性校验..."
+          
+          # 将报错信息记录到 validate_err.log
           xcrun altool --validate-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER" || { send_callback "error" "苹果校验未通过，请检查包名或版本号"; exit 1; }
+            --apiIssuer "$ISSUER" > validate_info.log 2> validate_err.log || {
+              # 如果失败，读取错误日志的前几行发送给前端
+              ERR_DETAIL=$(cat validate_err.log | grep "ERROR" | head -n 3)
+              if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL=$(cat validate_info.log | grep "ERROR" | head -n 3); fi
+              send_callback "error" "校验失败: $ERR_DETAIL"
+              exit 1
+            }
 
-          # 6. 上传阶段
-          send_callback "running" "校验通过，正在正式推送到 App Store Connect..."
+          # 6. 上传阶段 (捕获详细报错)
+          send_callback "running" "校验通过，正在正式上传至 App Store..."
           xcrun altool --upload-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER" || { send_callback "error" "上传 Apple 服务器超时或失败"; exit 1; }
+            --apiIssuer "$ISSUER" > upload_info.log 2> upload_err.log || {
+              ERR_DETAIL=$(cat upload_err.log | grep "ERROR" | head -n 3)
+              if [ -z "$ERR_DETAIL" ]; then ERR_DETAIL=$(cat upload_info.log | grep "ERROR" | head -n 3); fi
+              send_callback "error" "上传失败: $ERR_DETAIL"
+              exit 1
+            }
 
           # 7. 完成
-          send_callback "success" "恭喜 wuyong！App 已成功上传至商店"
+          send_callback "success" "恭喜 wuyong！App 已成功上传至 App Store Connect"
 
-      - name: Cleanup on Failure
-        if: failure()
+      - name: Cleanup
+        if: always()
         run: |
-          # 如果中间任何一步崩了，清理一下敏感文件
           rm -rf ~/.private_keys
+          echo "临时密钥已清理"
