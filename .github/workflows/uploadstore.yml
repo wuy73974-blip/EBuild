@@ -13,27 +13,27 @@ jobs:
 
       - name: Download and Upload IPA
         run: |
-          # 1. 直接从 Payload 提取变量
+          # 1. 提取变量
           IPA_URL="${{ github.event.client_payload.ipa_url }}"
           RAW_P8="${{ github.event.client_payload.apple_p8_base64 }}"
           KEY_ID="${{ github.event.client_payload.apple_key_id }}"
           ISSUER="${{ github.event.client_payload.apple_issuer_id }}"
 
-          # 2. 安全屏蔽：防止这些变量出现在日志中
+          # 2. 安全屏蔽
           echo "::add-mask::$RAW_P8"
           echo "::add-mask::$KEY_ID"
           echo "::add-mask::$ISSUER"
 
-          # 3. 创建私钥目录和文件 (文件名必须匹配 Key ID)
+          # 3. 还原私钥
           mkdir -p ~/.private_keys
           echo -n "$RAW_P8" | base64 -d > ~/.private_keys/AuthKey_$KEY_ID.p8
           
-          # 4. 下载 IPA 文件
-          echo "正在从服务器下载 IPA..."
-         curl -fL "$IPA_URL" -o build.ipa || { echo "下载 IPA 失败"; exit 1; }
+          # 4. 下载 IPA (增加失败检测)
+          echo "正在下载 IPA: $IPA_URL"
+          curl -fL "$IPA_URL" -o build.ipa || { echo "下载失败，请检查 URL 是否可公开访问"; exit 1; }
 
-          # 5. 执行验证 (推荐先验证再上传，避免浪费额度)
-          echo "正在校验 IPA 配置..."
+          # 5. 执行验证
+          echo "正在向 Apple 校验构建版本..."
           xcrun altool --validate-app \
             -f build.ipa \
             -t ios \
@@ -41,7 +41,7 @@ jobs:
             --apiIssuer "$ISSUER"
 
           # 6. 正式上传
-          echo "校验通过，正在上传至 App Store..."
+          echo "准备就绪，开始上传..."
           xcrun altool --upload-app \
             -f build.ipa \
             -t ios \
