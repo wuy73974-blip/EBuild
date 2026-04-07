@@ -1,63 +1,39 @@
-name: Upload IPA to App Store
-
-on:
-  repository_dispatch:
-    types: [ebbuild_upload_ipa]
-
-jobs:
-  upload:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download and Upload IPA
+- name: Download and Upload IPA
         run: |
-          # 1. 提取变量
+          # 1. 提取变量 (确保变量名和 Koa 的 apple_p8_content 一致)
           IPA_URL="${{ github.event.client_payload.ipa_url }}"
-          RAW_P8="${{ github.event.client_payload.apple_p8_base64 }}"
+          RAW_P8="${{ github.event.client_payload.apple_p8_content }}"
           KEY_ID="${{ github.event.client_payload.apple_key_id }}"
           ISSUER="${{ github.event.client_payload.apple_issuer_id }}"
 
-          # 2. 安全屏蔽：防止敏感变量出现在日志中
-          echo "::add-mask::$RAW_P8"
-          echo "::add-mask::$KEY_ID"
-          echo "::add-mask::$ISSUER"
+          # 2. 核心：定义绝对路径 (避免 ~ 在脚本中失效)
+          P8_DIR="$HOME/.private_keys"
+          P8_PATH="$P8_DIR/AuthKey_$KEY_ID.p8"
 
-          # 3. 还原私钥文件 (加固逻辑)
-          mkdir -p ~/.private_keys
-          # 使用 printf %s 确保字符串原样传递给 base64 解码，避免 echo 自动加换行符
-          printf "%s" "$RAW_P8" | base64 -d > ~/.private_keys/AuthKey_$KEY_ID.p8
+          # 3. 变量有效性预检
+          if [ -z "$RAW_P8" ]; then
+            echo "错误: 未接收到 apple_p8_content 数据，请检查 Koa 参数名！"
+            exit 1
+          fi
+
+          # 4. 创建目录并解码还原 (使用 printf 避免 echo 带来的换行污染)
+          mkdir -p "$P8_DIR"
+          printf "%s" "$RAW_P8" | base64 -d > "$P8_PATH"
+
+          # 5. 再次验证文件是否存在且不为空
+          if [ ! -s "$P8_PATH" ]; then
+            echo "错误: 密钥文件创建失败或为空！"
+            exit 1
+          fi
           
-          # 【调试步骤】检查文件大小是否正常（通常为 150-200 字节）
-          FILE_SIZE=$(stat -f%z "~/.private_keys/AuthKey_$KEY_ID.p8")
-          echo "密钥文件还原成功，大小为: $FILE_SIZE 字节"
+          echo "密钥文件已就绪: $P8_PATH"
 
-          # 4. 下载 IPA (增加失败检测 -fL)
-          echo "正在从服务器下载 IPA: $IPA_URL"
-          curl -fL "$IPA_URL" -o build.ipa || { echo "错误: IPA 下载失败，请检查 URL"; exit 1; }
+          # 6. 下载 IPA
+          curl -fL "$IPA_URL" -o build.ipa || { echo "下载 IPA 失败"; exit 1; }
 
-          # 5. 执行验证 (Validation)
-          echo "正在向 Apple 校验构建版本..."
-          # 注意：altool 报错通常是因为文件路径或 JWT 签名问题
-          xcrun altool --validate-app \
-            -f build.ipa \
-            -t ios \
-            --apiKey "$KEY_ID" \
-            --apiIssuer "$ISSUER" \
-            --verbose # 增加 verbose 模式，万一失败可以看更详细的输出
-
-          # 6. 正式上传 (Upload)
-          echo "校验通过，正在上传至 App Store..."
+          # 7. 执行上传 (altool 会自动去 ~/.private_keys 找文件)
           xcrun altool --upload-app \
             -f build.ipa \
             -t ios \
             --apiKey "$KEY_ID" \
             --apiIssuer "$ISSUER"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          # 无论成功失败，删除私钥文件，确保安全
-          rm -rf ~/.private_keys
-          echo "已清理临时密钥文件。"
