@@ -1,0 +1,33 @@
+
+name: Upload IPA to App Store
+
+on:
+  repository_dispatch:
+    types: [ebbuild_upload_ipa] # 匹配 Koa 传过来的 event_type
+
+jobs:
+  upload:
+    runs-on: macos-latest # 必须用 macos 才能调用 xcrun
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download IPA
+        run: curl -L "${{ github.event.client_payload.ipa_url }}" -o build.ipa
+
+      - name: Upload to App Store Connect
+        env:
+          API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }} # .p8 内容
+        run: |
+          # 1. 创建私钥文件
+          mkdir -p ~/.private_keys
+          echo "$API_PRIVATE_KEY" > ~/.private_keys/AuthKey_$API_KEY_ID.p8
+          
+          # 2. 调用苹果官方工具上传
+          xcrun altool --upload-app \
+            -f build.ipa \
+            -t ios \
+            --apiKey "$API_KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
