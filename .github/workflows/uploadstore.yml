@@ -21,7 +21,7 @@ jobs:
           TASK_ID="${{ github.event.client_payload.taskId }}"
 
           # 2. 回调配置
-          CALLBACK_URL="http://api.whzmsl.top/api/ios/uploadipa/callback"
+          CALLBACK_URL="http://m6f95b99.natappfree.cc/api/ios/uploadipa/callback"
           
           send_callback() {
             local status=$1
