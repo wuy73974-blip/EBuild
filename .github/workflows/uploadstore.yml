@@ -87,7 +87,7 @@ jobs:
             }
 
           # 7. 完成
-          send_callback "success" "恭喜 wuyong！App 已成功上传至 App Store Connect"
+          send_callback "success" "恭喜您！App 已成功上传至 App Store Connect"
 
       - name: Cleanup
         if: always()
